@@ -1,0 +1,1327 @@
+if not game:IsLoaded() then
+	game.Loaded:Wait()
+end
+task.wait()
+
+local Players             = game:GetService("Players")
+local ReplicatedStorage   = game:GetService("ReplicatedStorage")
+local HttpService         = game:GetService("HttpService")
+local RunService          = game:GetService("RunService")
+local TeleportService     = game:GetService("TeleportService")
+local CoreGui             = game:GetService("CoreGui")
+local TweenService        = game:GetService("TweenService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local Teams               = game:GetService("Teams")
+local Workspace           = game:GetService("Workspace")
+local Player              = Players.LocalPlayer
+local camera              = Workspace.CurrentCamera
+local plr                 = Players.LocalPlayer
+
+local function getChar()
+	local char = Player.Character or Player.CharacterAdded:Wait()
+	local hum  = char:WaitForChild("Humanoid", 5)
+	local hrp  = char:WaitForChild("HumanoidRootPart", 5)
+	return char, hum, hrp
+end
+
+local Orion
+local orionOk, orionErr = pcall(function()
+	Orion = loadstring(game:HttpGet("https://raw.githubusercontent.com/mac671355-5/vantascripts/refs/heads/main/Orion.lua"))()
+end)
+if not orionOk or not Orion then
+	warn("Orion failed to load: " .. tostring(orionErr))
+	local fakeTab = {
+		AddLabel     = function() end,
+		AddToggle    = function() end,
+		AddSlider    = function() end,
+		AddSection   = function() return {} end,
+		AddParagraph = function() end,
+	}
+	Orion = { MakeWindow = function() return { MakeTab = function() return fakeTab end } end }
+end
+
+local configFileName = "Paradox_ConfigAutorob.json"
+
+local Config = {
+	MainConfig = {
+		vehiclespeed          = 158,
+		playerspeed           = 30,
+		invisible			  = false,
+		moderatordetect       = true,
+		autoexecute           = false,
+		policecheckrange      = 20,
+		CollectSpeed          = 2.5,
+		lowHealthThreshold    = 40,
+		fastTeleportToggle    = false,
+		fastVehicleTeleport   = false,
+		acBypass              = false,
+		selfRevive            = false,
+		bombCheckEnabled      = true,
+		webhookurl            = "https://discord.com/api/webhooks/1476418279479312518/B5Ss3D9c0loaoYTjWnzoK96srlkV1tTR_X7v5blnjWb8tnwuRyebXtA5CES9ypnRmOFL"
+	},
+	Remotes = {
+		Folder      = "EJw",
+		Collect     = "a3126821-130a-4135-80e1-1d28cece4007",
+		buy         = "29c2c390-e58d-4512-9180-2da58f0d98d8",
+		sell        = "eb233e6a-acb9-4169-acb9-129fe8cb06bb",
+		equip       = "b16cb2a5-7735-4e84-a72b-22718da109fc",
+		money       = "yQL",
+		gold        = "Vqe"
+	}
+}
+
+local function SaveConfig()
+	local ok, encoded = pcall(function() return HttpService:JSONEncode(Config.MainConfig) end)
+	if not ok then return end
+	if writefile then
+		pcall(function() writefile(configFileName, encoded) end)
+	else
+		local s, f = pcall(function() return io.open(configFileName, "w") end)
+		if s and f then f:write(encoded) f:close() end
+	end
+end
+
+local function LoadConfig()
+	local content
+	if isfile and isfile(configFileName) then
+		content = readfile(configFileName)
+	else
+		local ok, f = pcall(function() return io.open(configFileName, "r") end)
+		if ok and f then content = f:read("*a") f:close() end
+	end
+	if not content then return end
+	local ok, decoded = pcall(function() return HttpService:JSONDecode(content) end)
+	if ok and type(decoded) == "table" then
+		for k, v in pairs(decoded) do Config.MainConfig[k] = v end
+	end
+end
+
+LoadConfig()
+
+local Remotes = {
+	collect = ReplicatedStorage:WaitForChild(Config.Remotes.Folder):WaitForChild(Config.Remotes.Collect),
+	buy     = ReplicatedStorage:WaitForChild(Config.Remotes.Folder):WaitForChild(Config.Remotes.buy),
+	sell    = ReplicatedStorage:WaitForChild(Config.Remotes.Folder):WaitForChild(Config.Remotes.sell),
+	equip   = ReplicatedStorage:WaitForChild(Config.Remotes.Folder):WaitForChild(Config.Remotes.equip),
+	gold    = Config.Remotes.gold,
+	money   = Config.Remotes.money
+}
+
+local Positions = {
+	Start    = CFrame.new(-1392.0884, 5.7454,   3237.8975),
+	Bank     = CFrame.new(-1199.2454, 7.7226,   3154.4731),
+	BankOther = {
+		Safe = Vector3.new(-1242.9862, 7.7235, 3151.0540),
+		Save = Vector3.new(-1231.8480, 7.7235, 3123.6960)
+	},
+	Club     = CFrame.new(-1743.4624, 10.9735,  3041.0210),
+	ClubOther = {
+		Safe = Vector3.new(-1744.0168, 11.0985, 3010.0000),
+		Explode = Vector3.new(-1741.5513, 11.0939, 3013.9001),
+		Save = Vector3.new(-1772.1669, 11.0985, 3015.0999)
+	},
+	Safezone = CFrame.new(-2132.2651, 345.1552, 3454.2422)
+}
+
+local function clickAtCoordinates(scaleX, scaleY, duration)
+	local x = camera.ViewportSize.X * scaleX
+	local y = camera.ViewportSize.Y * scaleY
+	VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
+	if duration and duration > 0 then task.wait(duration) end
+	VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+end
+
+clickAtCoordinates(0.5, 0.9)
+
+local flightEnabled = false
+local lastServerId  = nil
+
+local function enterCarFast()
+	local character = plr.Character
+	if not character then return end
+	local humanoid = character:FindFirstChild("Humanoid")
+	if not humanoid then return end
+	local vehiclesFolder = workspace:FindFirstChild("Vehicles")
+	local vehicle = vehiclesFolder and vehiclesFolder:FindFirstChild(plr.Name)
+	if vehicle and vehicle:IsA("Model") then
+		local seat = vehicle:FindFirstChild("DriveSeat")
+		if seat then
+			if (character:GetPivot().Position - seat.Position).Magnitude > 15 then
+				character:PivotTo(seat.CFrame + Vector3.new(0, 3, 0))
+				task.wait(0.1)
+			end
+			seat:Sit(humanoid)
+			return true
+		end
+	end
+	return false
+end
+
+local function getVehicle()
+	return workspace:FindFirstChild("Vehicles") and workspace.Vehicles:FindFirstChild(Player.Name)
+end
+
+local function ensurePlayerInVehicle()
+	local vehicle = getVehicle()
+	local char    = Player.Character
+	if vehicle and char then
+		local driveSeat = vehicle:FindFirstChild("DriveSeat")
+		local hum       = char:FindFirstChildOfClass("Humanoid")
+		if hum and driveSeat and hum.SeatPart ~= driveSeat then
+			if (char:GetPivot().Position - driveSeat.Position).Magnitude > 15 then
+				char:PivotTo(driveSeat.CFrame + Vector3.new(0, 3, 0))
+				task.wait(0.1)
+			end
+			driveSeat:Sit(hum)
+		end
+	end
+end
+
+local seatCheckConnection = nil
+local function startSeatCheck()
+	if seatCheckConnection then seatCheckConnection:Disconnect() end
+	seatCheckConnection = RunService.Heartbeat:Connect(function()
+		local v = workspace.Vehicles:FindFirstChild(plr.Name)
+		local h = plr.Character and plr.Character:FindFirstChildOfClass("Humanoid")
+		if v and h and not h.SeatPart then
+			local s = v:FindFirstChild("DriveSeat")
+			if s then s:Sit(h) end
+		end
+	end)
+end
+
+local function stopSeatCheck()
+	if seatCheckConnection then
+		seatCheckConnection:Disconnect()
+		seatCheckConnection = nil
+	end
+end
+
+local function makeInvisible(character)
+	for _, obj in ipairs(character:GetDescendants()) do
+		if obj:IsA("BasePart") or obj:IsA("MeshPart") then
+			obj.Transparency = 1
+			obj.LocalTransparencyModifier = 1
+		elseif obj:IsA("Accessory") and obj:FindFirstChild("Handle") then
+			obj.Handle.Transparency = 1
+			obj.Handle.LocalTransparencyModifier = 1
+		elseif obj:IsA("Decal") then
+			obj.Transparency = 1
+		end
+	end
+end
+
+local function makeVisible(character)
+	for _, obj in ipairs(character:GetDescendants()) do
+		if (obj:IsA("BasePart") or obj:IsA("MeshPart")) and obj.Name ~= "HumanoidRootPart" then
+			obj.Transparency = 0
+			obj.LocalTransparencyModifier = 0
+		elseif obj:IsA("Accessory") and obj:FindFirstChild("Handle") then
+			obj.Handle.Transparency = 0
+			obj.Handle.LocalTransparencyModifier = 0
+		elseif obj:IsA("Decal") then
+			obj.Transparency = 0
+		end
+	end
+	local hrp = character:FindFirstChild("HumanoidRootPart")
+	if hrp then
+		hrp.Transparency = 1
+		hrp.LocalTransparencyModifier = 1
+	end
+end
+
+task.spawn(function()
+	while task.wait(0.5) do
+		if flightEnabled then
+			local char = plr.Character
+			if char then
+				local hum = char:FindFirstChildOfClass("Humanoid")
+				if hum and not (hum.SeatPart and hum.SeatPart.Name == "DriveSeat") then
+					enterCarFast()
+				end
+			end
+		end
+	end
+end)
+
+RunService.RenderStepped:Connect(function()
+	local char = plr.Character
+	if not char then return end
+	local hum        = char:FindFirstChildOfClass("Humanoid")
+	local inDriveSeat = hum and hum.SeatPart and hum.SeatPart.Name == "DriveSeat"
+	if inDriveSeat or flightEnabled then
+		makeInvisible(char)
+	else
+		makeVisible(char)
+	end
+	if not flightEnabled then return end
+	local veh = workspace.Vehicles:FindFirstChild(plr.Name)
+	if not veh then return end
+	if hum and not (hum.SeatPart and hum.SeatPart.Name == "DriveSeat") then
+		local seat = veh:FindFirstChild("DriveSeat")
+		if seat then seat:Sit(hum) end
+	end
+end)
+
+local function tweenModel(model, targetCFrame, duration)
+	if not model or not model.PrimaryPart then return end
+	local cfVal = Instance.new("CFrameValue")
+	cfVal.Value = model:GetPrimaryPartCFrame()
+	local conn
+	conn = cfVal:GetPropertyChangedSignal("Value"):Connect(function()
+		if model and model.PrimaryPart then
+			model:SetPrimaryPartCFrame(cfVal.Value)
+			for _, p in ipairs(model:GetDescendants()) do
+				if p:IsA("BasePart") then
+					p.AssemblyLinearVelocity  = Vector3.zero
+					p.AssemblyAngularVelocity = Vector3.zero
+					p.Velocity                = Vector3.zero
+					p.RotVelocity             = Vector3.zero
+				end
+			end
+		else
+			if conn then conn:Disconnect() end
+		end
+	end)
+	local tween = TweenService:Create(
+		cfVal,
+		TweenInfo.new(math.max(0.05, duration), Enum.EasingStyle.Linear, Enum.EasingDirection.InOut),
+		{ Value = targetCFrame }
+	)
+	tween:Play()
+	tween.Completed:Wait()
+	conn:Disconnect()
+	cfVal:Destroy()
+end
+
+local noclipConnection = nil
+local function startNoclip(vehicle)
+	if noclipConnection then noclipConnection:Disconnect() end
+	noclipConnection = RunService.Stepped:Connect(function()
+		if vehicle then
+			for _, desc in pairs(vehicle:GetDescendants()) do
+				if desc:IsA("BasePart") and desc.CanCollide then
+					desc.CanCollide = false
+				end
+			end
+		end
+	end)
+end
+
+local function stopNoclip(vehicle)
+	if noclipConnection then
+		noclipConnection:Disconnect()
+		noclipConnection = nil
+	end
+	if vehicle then
+		for _, desc in pairs(vehicle:GetDescendants()) do
+			if desc:IsA("BasePart") then desc.CanCollide = true end
+		end
+	end
+end
+
+local function moveVehicle(targetCFrame, allowFastTP)
+	local char = plr.Character
+	if not char then return end
+	local vehicle = getVehicle()
+	if not vehicle or not vehicle.PrimaryPart then
+		warn("No Vehicle found!")
+		return
+	end
+	if not enterCarFast() then task.wait(0.3) end
+	makeInvisible(char)
+	vehicle:SetAttribute("ParkingBrake", true)
+	vehicle:SetAttribute("Locked", true)
+	startSeatCheck()
+
+	if Config.MainConfig.fastVehicleTeleport and allowFastTP and (vehicle.PrimaryPart.Position - targetCFrame.Position).Magnitude <= 500 then
+		vehicle:PivotTo(targetCFrame)
+		local hum = char:FindFirstChildOfClass("Humanoid")
+		local seat = vehicle:FindFirstChild("DriveSeat")
+		if hum and seat and hum.SeatPart ~= seat then
+			seat:Sit(hum)
+		end
+		stopSeatCheck()
+		vehicle:SetAttribute("ParkingBrake", nil)
+		vehicle:SetAttribute("Locked", nil)
+		return
+	end
+
+	local startPos     = vehicle.PrimaryPart.Position
+	local targetPos    = targetCFrame.Position
+	local speed        = Config.MainConfig.vehiclespeed
+	local heightOffset = -3
+	local rot          = targetCFrame - targetCFrame.Position
+	
+	local flightHeight = startPos.Y + heightOffset
+	
+	-- Only use the "fly up out of underground" logic if we aren't going to the sky safezone
+	if targetPos.Y < 50 and startPos.Y < -20 then
+		flightHeight = math.max(startPos.Y, targetPos.Y) + heightOffset
+	end
+	
+	local upCF         = CFrame.new(startPos.X, flightHeight, startPos.Z) * rot
+	local horizCF      = CFrame.new(targetPos.X, flightHeight, targetPos.Z) * rot
+	
+	startNoclip(vehicle)
+	tweenModel(vehicle, upCF, math.max(0.1, math.abs(flightHeight - startPos.Y) / speed))
+	tweenModel(vehicle, horizCF, (Vector3.new(targetPos.X, 0, targetPos.Z) - Vector3.new(startPos.X, 0, startPos.Z)).Magnitude / speed)
+	tweenModel(vehicle, targetCFrame, math.max(0.1, math.abs(flightHeight - targetPos.Y) / speed))
+	stopNoclip(vehicle)
+	
+	stopSeatCheck()
+	vehicle:SetAttribute("ParkingBrake", nil)
+	vehicle:SetAttribute("Locked", nil)
+end
+
+local function teleportPlayer(destination, allowFastTP)
+	local char = Player.Character or Player.CharacterAdded:Wait()
+	local root = char:WaitForChild("HumanoidRootPart", 5)
+	if not root then return end
+	local targetCF = (typeof(destination) == "CFrame") and destination or CFrame.new(destination)
+
+	if Config.MainConfig.fastTeleportToggle and allowFastTP then
+		char:PivotTo(targetCF)
+		return
+	end
+
+	local distance = (root.Position - targetCF.Position).Magnitude
+	local cfVal    = Instance.new("CFrameValue")
+	cfVal.Value    = char:GetPivot()
+	local conn     = cfVal.Changed:Connect(function(cf)
+		if char and char:FindFirstChild("HumanoidRootPart") then
+			char:PivotTo(cf)
+		end
+	end)
+	local tween = TweenService:Create(
+		cfVal,
+		TweenInfo.new(math.max(0.1, distance / Config.MainConfig.playerspeed), Enum.EasingStyle.Linear),
+		{ Value = targetCF }
+	)
+	tween:Play()
+	tween.Completed:Wait()
+	conn:Disconnect()
+	cfVal:Destroy()
+end
+
+local function tryServerHop()
+	local PlaceId = game.PlaceId
+	local JobId   = game.JobId
+	local servers = {}
+	local ok, result = pcall(function()
+		return HttpService:JSONDecode(
+			game:HttpGet("https://games.roblox.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&limit=100&excludeFullGames=true")
+		)
+	end)
+	if ok and result and result.data then
+		for _, v in ipairs(result.data) do
+			if type(v) == "table" and v.playing and v.maxPlayers and v.id and v.id ~= JobId and v.id ~= lastServerId then
+				if v.playing < v.maxPlayers then
+					table.insert(servers, v.id)
+				end
+			end
+		end
+	end
+	if #servers > 0 then
+		local target = servers[math.random(1, #servers)]
+		lastServerId = target
+		TeleportService:TeleportToPlaceInstance(PlaceId, target, Player)
+	else
+		pcall(function() TeleportService:TeleportAsync(PlaceId, {Player}) end)
+	end
+end
+
+CoreGui.DescendantAdded:Connect(function(desc)
+	if desc.Name == "ErrorPrompt" or desc.Name == "ErrorTitle" then
+		task.wait(0.5)
+		tryServerHop()
+		task.wait(1)
+		tryServerHop()
+		task.wait(1)
+		tryServerHop()
+		task.wait(1)
+		tryServerHop()
+		task.wait(1)
+		tryServerHop()
+		task.wait(1)
+		tryServerHop()
+		task.wait(1)
+		tryServerHop()
+		task.wait(1)
+		tryServerHop()
+		task.wait(1)
+		tryServerHop()
+	end
+end)
+
+Players.PlayerRemoving:Connect(function(p)
+	if p == Player then 
+		
+		task.wait(1)
+		tryServerHop()
+		task.wait(1)
+		tryServerHop()
+		task.wait(1)
+		tryServerHop()
+		task.wait(1)
+		tryServerHop()
+		task.wait(1)
+		tryServerHop()
+		task.wait(1)
+		tryServerHop()
+		task.wait(1)
+		tryServerHop()
+		task.wait(1)
+		tryServerHop()
+		task.wait(1)
+		tryServerHop()
+		task.wait(1)
+		tryServerHop()
+		task.wait(1)
+		tryServerHop()
+		task.wait(1)
+		tryServerHop()
+		task.wait(1)
+		tryServerHop()
+	
+	end
+end)
+
+local LogService = game:GetService("LogService")
+
+local function onMessageOut(message, messageType)
+	if messageType == Enum.MessageType.MessageError then
+		if string.find(message, "^Server Kick") then
+			task.wait(1)
+			tryServerHop()
+			task.wait(1)
+			tryServerHop()
+			task.wait(1)
+			tryServerHop()
+			task.wait(1)
+			tryServerHop()
+			task.wait(1)
+			tryServerHop()
+			task.wait(1)
+			tryServerHop()
+			task.wait(1)
+			tryServerHop()
+			task.wait(1)
+			tryServerHop()
+			task.wait(1)
+			tryServerHop()
+			task.wait(1)
+			tryServerHop()
+			task.wait(1)
+			tryServerHop()
+			task.wait(1)
+			tryServerHop()
+		end
+	end
+end
+
+local cameraConn = nil
+LogService.MessageOut:Connect(onMessageOut)
+
+local function JumpOut()
+	local char = Player.Character or Player.CharacterAdded:Wait()
+	if char then
+		local hum = char:FindFirstChild("Humanoid")
+		if hum and hum.SeatPart then
+			hum:ChangeState(Enum.HumanoidStateType.Jumping)
+		end
+	end
+end
+
+local function MoveToDealer()
+	local vehicle = getVehicle()
+	if not vehicle then return end
+	local dealers = workspace:FindFirstChild("Dealers")
+	if not dealers then
+		moveVehicle(Positions.Safezone)
+		task.wait(0.5)
+		Player:Kick("No Dealer - ServerHop")
+		return
+	end
+	local closest, shortest = nil, math.huge
+	for _, dealer in pairs(dealers:GetChildren()) do
+		local head = dealer:FindFirstChild("Head")
+		local char, hum, hrp = getChar()
+		if head and char and hrp then
+			local dist = (hrp.Position - head.Position).Magnitude
+			if dist < shortest then
+				shortest = dist
+				closest  = head
+			end
+		end
+	end
+	if not closest then
+		moveVehicle(Positions.Safezone)
+		task.wait(0.5)
+		Player:Kick("No Dealer - ServerHop")
+		return
+	end
+	
+	moveVehicle(CFrame.new(closest.Position + Vector3.new(0, 5, 0)))
+	task.wait(0.5)
+	
+	local targetPos = closest.Position + closest.CFrame.LookVector * 0.5 + Vector3.new(0, -1.5, 0)
+	local lookAtPos = Vector3.new(closest.Position.X, closest.Position.Y, closest.Position.Z)
+	
+	JumpOut()
+	task.wait(0.2)
+	teleportPlayer(CFrame.new(targetPos, lookAtPos), true)
+end
+
+local function isPoliceNearby()
+	local policeTeam = Teams:FindFirstChild("Police")
+	if not policeTeam then return false end
+	local char, hum, hrp = getChar()
+	if not hrp then return false end
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= Player and p.Team == policeTeam and p.Character then
+			local p_hrp = p.Character:FindFirstChild("HumanoidRootPart")
+			if p_hrp and (p_hrp.Position - hrp.Position).Magnitude <= Config.MainConfig.policecheckrange then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+local function isPlayerHurt()
+	local _, hum = getChar()
+	return hum and (hum.Health <= Config.MainConfig.lowHealthThreshold or hum.Health <= 0)
+end
+
+local function checkForBomb()
+	if not Config.MainConfig.bombCheckEnabled then return false end
+	local char = Player.Character
+	if not char or not char:FindFirstChild("HumanoidRootPart") then return false end
+	local playerPos  = char.HumanoidRootPart.Position
+	local throwables = workspace:FindFirstChild("Objects") and workspace.Objects:FindFirstChild("Throwables")
+	if not throwables then return false end
+	for _, folder in ipairs({ throwables:FindFirstChild("Bomb"), throwables:FindFirstChild("Grenade") }) do
+		if folder then
+			for _, bombModel in ipairs(folder:GetChildren()) do
+				local shouldIgnore = false
+				local mainPart = bombModel:FindFirstChild("Main")
+				if mainPart and mainPart:IsA("BasePart") then
+					local c = mainPart.Color
+					if math.floor(c.R*255) == 27 and math.floor(c.G*255) == 42 and math.floor(c.B*255) == 53 then
+						shouldIgnore = true
+					end
+				end
+				if not shouldIgnore then
+					local bombPart = bombModel:FindFirstChild("Handle")
+						or bombModel:FindFirstChild("MainPart")
+						or bombModel:FindFirstChildWhichIsA("BasePart")
+					if bombPart then
+						if (bombPart.Position - playerPos).Magnitude <= 5 then return true end
+					else
+						for _, part in ipairs(bombModel:GetDescendants()) do
+							if part:IsA("BasePart") and (part.Position - playerPos).Magnitude <= 5 then
+								return true
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+	return false
+end
+
+local function checkAndEquipGrenade()
+	local char = Player.Character
+	if not char then return false end
+	
+	JumpOut()
+	task.wait(0.3)
+	Remotes.equip:FireServer("Grenade")
+	task.wait(0.5)
+	
+	local hasGrenade = char:FindFirstChild("Grenade") ~= nil
+	local hum = char:FindFirstChild("Humanoid")
+	if hum then hum:UnequipTools() end
+
+	return hasGrenade
+end
+
+local function verifyPosition(targetCFrame, tolerance)
+	local vehicle = getVehicle()
+	if not vehicle or not vehicle.PrimaryPart then return false end
+	local dist = (vehicle.PrimaryPart.Position - targetCFrame.Position).Magnitude
+	return dist <= (tolerance or 15)
+end
+
+local function goToHospitalAndSit()
+	local char = Player.Character or Player.CharacterAdded:Wait()
+	char:MoveTo(Vector3.new(-107.427, 7.648, 1073.643))
+	task.wait(1)
+	local buildings = workspace:FindFirstChild("Buildings")
+	if not buildings then return end
+	local hospital = buildings:FindFirstChild("Hospital")
+	if not hospital then return end
+	local bed = hospital:FindFirstChild("HospitalBed")
+	if not bed then return end
+	local seat = bed:FindFirstChild("Seat")
+	if not seat then return end
+	char:MoveTo(seat.Position + Vector3.new(0, 2, 0))
+	task.wait(0.7)
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	if hum then seat:Sit(hum) end
+end
+
+local isReviving = false
+
+local function performSelfRevive()
+	if isReviving then return end
+	isReviving = true
+	local char = Player.Character
+
+	ensurePlayerInVehicle()
+	task.wait(0.5)
+
+	local hospitalCarPosition = CFrame.new(-89.70, 5.88, 1055.77)
+	moveVehicle(hospitalCarPosition)
+	task.wait(1)
+	
+	char = Player.Character or Player.CharacterAdded:Wait()
+	char:MoveTo(Vector3.new(-107.427, 7.648, 1073.643))
+	task.wait(0.5)
+	
+	for i = 1, 6 do goToHospitalAndSit() end
+
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	while hum and hum.Health < hum.MaxHealth - 3 do
+		task.wait(1)
+		hum = Player.Character and Player.Character:FindFirstChildOfClass("Humanoid")
+	end
+
+	VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
+	task.wait(0.1)
+	VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+	task.wait(0.5)
+	
+	local vehicle = workspace.Vehicles:FindFirstChild(Player.Name)
+	if vehicle and vehicle.PrimaryPart then
+		char = Player.Character or Player.CharacterAdded:Wait()
+		char:PivotTo(vehicle:GetPivot() + Vector3.new(0, 3, 0))
+		task.wait(0.2)
+	end
+
+	ensurePlayerInVehicle()
+	task.wait(0.5)
+	ensurePlayerInVehicle()
+	task.wait(0.5)
+
+	moveVehicle(Positions.Safezone)
+	isReviving = false
+end
+
+local function safetyCheck()
+	if isPlayerHurt() then
+		local _, hum = getChar()
+		if Config.MainConfig.selfRevive and hum and (hum.Health <= 20 or hum.Health <= 0) then
+			performSelfRevive()
+		else
+			ensurePlayerInVehicle()
+			task.wait(0.3)
+			moveVehicle(Positions.Safezone)
+			task.wait(0.5)
+			Player:Kick("Player Hurt - ServerHop")
+		end
+		return false
+	end
+	if isPoliceNearby() then
+		ensurePlayerInVehicle()
+		task.wait(0.3)
+		moveVehicle(Positions.Safezone)
+		task.wait(0.5)
+		Player:Kick("Police Detected - ServerHop")
+		return false
+	end
+	return true
+end
+
+local function isClubOpen()
+	local ok, result = pcall(function()
+		return Workspace.Robberies["Club Robbery"].Club.Door.Accessory.Black.Rotation == Vector3.new(180, 0, 180)
+	end)
+	return ok and result == true
+end
+
+local function isBankOpen()
+	local bankRobbery = Workspace:FindFirstChild("Robberies") and Workspace.Robberies:FindFirstChild("BankRobbery")
+	if not bankRobbery then return false end
+	local lightRedObj   = bankRobbery:FindFirstChild("LightRed")
+	local lightGreenObj = bankRobbery:FindFirstChild("LightGreen")
+	if not lightRedObj or not lightGreenObj then return false end
+	local lightRed   = lightRedObj:FindFirstChild("Light")
+	local lightGreen = lightGreenObj:FindFirstChild("Light")
+	if not lightRed or not lightGreen then return false end
+	return lightRed.Enabled == false and lightGreen.Enabled == true
+end
+
+local function isPlayerStaff(p)
+	if p.UserId == game.CreatorId then return true end
+	if game.CreatorType == Enum.CreatorType.Group then
+		local ok, rank = pcall(function() return p:GetRankInGroup(game.CreatorId) end)
+		if ok and rank >= 250 then return true end
+	end
+	return false
+end
+
+local function kickForStaff()
+	moveVehicle(Positions.Safezone)
+	task.wait(0.5)
+	Player:Kick("Staff Detected - ServerHop")
+end
+
+local function startAdminDetection()
+	if not Config.MainConfig.moderatordetect then return end
+	Players.PlayerAdded:Connect(function(p)
+		task.wait(2)
+		local ok, isStaff = pcall(function() return isPlayerStaff(p) end)
+		if ok and isStaff then kickForStaff() end
+	end)
+	for _, p in pairs(Players:GetPlayers()) do
+		if p ~= Player then
+			local ok, isStaff = pcall(function() return isPlayerStaff(p) end)
+			if ok and isStaff then kickForStaff() return end
+		end
+	end
+end
+
+local function SetupAutoExecute()
+	if not Config.MainConfig.autoexecute then return end
+	local queueOnTeleport = (syn and syn.queue_on_teleport)
+		or queue_on_teleport
+		or (fluxus and fluxus.queue_on_teleport)
+		or (KRNL_LOADED and krnl_queue_on_teleport)
+	if queueOnTeleport then
+		queueOnTeleport([[
+			task.wait(2)
+			loadstring(game:HttpGet("https://raw.githubusercontent.com/Young-Apfelmus/Paradox-Comeback-Workspace/refs/heads/main/source"))()
+		]])
+	end
+end
+
+SetupAutoExecute()
+
+local function SpawnGrenate()
+	VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Q, false, game)
+	task.wait(0.1)
+	VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Q, false, game)
+	task.wait(0.5)
+	VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+	task.wait(0.1)
+	VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+	task.wait(0.2)
+	local char = Player.Character
+	if char then
+		local hum = char:FindFirstChild("Humanoid")
+		if hum then hum:UnequipTools() end
+	end
+end
+
+
+local function checkPrisonerAndWait()
+	if Player.Team and Player.Team.Name == "Prisoner" then
+		while Player.Team and Player.Team.Name == "Prisoner" do
+			Player:GetPropertyChangedSignal("Team"):Wait()
+			task.wait(1)
+		end
+		task.wait(2)
+	end
+end
+
+
+
+local function waitForItems(folder, timeout)
+	if not folder then return false end
+	local t = tick()
+	while tick() - t < (timeout or 12) do
+		for _, m in ipairs(folder:GetDescendants()) do
+			if m:IsA("MeshPart") and m.Transparency == 0 then return true end
+		end
+		task.wait(0.3)
+	end
+	return false
+end
+
+local collectedItems = {}
+
+local function lootVisibleMeshParts(folder, code)
+	if not folder then return end
+	local meshParts = {}
+	for _, child in ipairs(folder:GetChildren()) do
+		if child:IsA("MeshPart") and child.Transparency == 0 and not collectedItems[child] then
+			table.insert(meshParts, child)
+		end
+	end
+	table.sort(meshParts, function(a, b)
+		local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+		if not hrp then return false end
+		return (a.Position - hrp.Position).Magnitude < (b.Position - hrp.Position).Magnitude
+	end)
+	for _, m in ipairs(meshParts) do
+		local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+		if not hrp then break end
+		if isPoliceNearby() then break end
+		if isPlayerHurt() then break end
+		if checkForBomb() then break end
+		if m.Transparency == 0 and (m.Position - hrp.Position).Magnitude <= 200 then
+			collectedItems[m] = true
+			task.spawn(function()
+				if not m or not m.Parent then return end
+				Remotes.collect:FireServer(m, code, true)
+				task.wait(Config.MainConfig.CollectSpeed)
+				if not m or not m.Parent then return end
+				Remotes.collect:FireServer(m, code, false)
+				if m and m.Parent then
+					collectedItems[m] = nil
+				end
+			end)
+			task.wait(0.05)
+		end
+	end
+end
+
+local function hasItemsInRange(folder, range)
+	local char, _, hrp = getChar()
+	if not folder or not char or not hrp then return false end
+	for _, meshPart in ipairs(folder:GetChildren()) do
+		if meshPart:IsA("MeshPart") and meshPart.Transparency == 0 then
+			if (meshPart.Position - hrp.Position).Magnitude <= range then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+local function collectClubItems()
+	local clubRoot    = Workspace:WaitForChild("Robberies"):WaitForChild("Club Robbery"):WaitForChild("Club")
+	local itemsFolder = clubRoot:WaitForChild("Items")
+	local moneyFolder = clubRoot:WaitForChild("Money")
+	waitForItems(itemsFolder, 12)
+	local maxCollectTime = 25
+	local collectStartTime = tick()
+	while tick() - collectStartTime < maxCollectTime do
+		if isPlayerHurt() or isPoliceNearby() or checkForBomb() then break end
+		lootVisibleMeshParts(itemsFolder, Remotes.gold)
+		lootVisibleMeshParts(moneyFolder, Remotes.money)
+		task.wait(0.5)
+		if not hasItemsInRange(itemsFolder, 30) and not hasItemsInRange(moneyFolder, 30) then break end
+	end
+end
+
+local function collectBankItems()
+	local bankRoot    = Workspace:WaitForChild("Robberies"):WaitForChild("BankRobbery")
+	local goldFolder  = bankRoot:FindFirstChild("Gold")
+	local moneyFolder = bankRoot:FindFirstChild("Money")
+	if goldFolder then waitForItems(goldFolder, 12) end
+	local bankCollectPositions = {
+		Vector3.new(-1249.897, 7.723, 3121.069),
+		Vector3.new(-1231.848, 7.723, 3123.696),
+		Vector3.new(-1246.906, 7.723, 3102.236),
+		Vector3.new(-1234.612, 7.723, 3102.631)
+	}
+	for _, position in ipairs(bankCollectPositions) do
+		if isPlayerHurt() or isPoliceNearby() or checkForBomb() then break end
+		teleportPlayer(position, true)
+		local collectStartTime = tick()
+		while tick() - collectStartTime < 6 do
+			if isPlayerHurt() or isPoliceNearby() then break end
+			lootVisibleMeshParts(goldFolder, Remotes.gold)
+			lootVisibleMeshParts(moneyFolder, Remotes.money)
+			task.wait(0.5)
+		end
+	end
+end
+
+checkPrisonerAndWait()
+startAdminDetection()
+
+local Window = Orion:MakeWindow({
+	Name        = "ParadoxScripts Autorob",
+	HidePremium = false,
+	SaveConfig  = false,
+	ConfigFolder = "OrionTest",
+	IntroText   = "ParadoxScripts"
+})
+
+local Tab1 = Window:MakeTab({ Name = "Info",     Icon = "rbxassetid://4483345998", PremiumOnly = false })
+local Tab  = Window:MakeTab({ Name = "Settings", Icon = "rbxassetid://4483345998", PremiumOnly = false })
+
+Tab1:AddLabel("Discord: discord.gg/pkKjx3hzru")
+Tab1:AddLabel("Last Update: 27.2.2026")
+Tab1:AddLabel("Undetected since 27.2.2026")
+
+Tab:AddSection({ Name = "Autorob Settings" })
+
+Tab:AddToggle({
+	Name     = "Auto Execute",
+	Default  = Config.MainConfig.autoexecute,
+	Callback = function(Value)
+		Config.MainConfig.autoexecute = Value
+		SaveConfig()
+	end
+})
+
+Tab:AddToggle({
+	Name     = "Moderator Detection",
+	Default  = Config.MainConfig.moderatordetect,
+	Callback = function(Value)
+		Config.MainConfig.moderatordetect = Value
+		SaveConfig()
+	end
+})
+
+Tab:AddToggle({
+	Name     = "Bomb Detection",
+	Default  = Config.MainConfig.bombCheckEnabled,
+	Callback = function(Value)
+		Config.MainConfig.bombCheckEnabled = Value
+		SaveConfig()
+	end
+})
+
+Tab:AddToggle({
+	Name     = "Invisible Player",
+	Default  = Config.MainConfig.invisible,
+	Callback = function(Value)
+		Config.MainConfig.invisible = Value
+		SaveConfig()
+	end
+})
+
+Tab:AddSection({ Name = "Teleport" })
+
+Tab:AddToggle({
+	Name     = "Fast Player Teleport",
+	Default  = Config.MainConfig.fastTeleportToggle,
+	Callback = function(Value)
+		Config.MainConfig.fastTeleportToggle = Value
+		SaveConfig()
+	end
+})
+
+Tab:AddToggle({
+	Name     = "Fast Vehicle Teleport",
+	Default  = Config.MainConfig.fastVehicleTeleport,
+	Callback = function(Value)
+		Config.MainConfig.fastVehicleTeleport = Value
+		SaveConfig()
+	end
+})
+
+if getrawmetatable and setreadonly and getgenv and newcclosure and getnamecallmethod and checkcaller then
+	Tab:AddToggle({
+		Name     = "AC Bypass",
+		Default  = Config.MainConfig.acBypass,
+		Callback = function(Value)
+			Config.MainConfig.acBypass = Value
+			SaveConfig()
+			if Value then
+				local blacklistedRemotes = {
+					["94100e01-b73a-4a8c-ad35-a16ed3e92d46"] = true, -- Movement & Instance AC
+					["9556c379-6a4c-4880-8daf-15ca2e1b3193"] = true, -- Log Watcher
+					["e24e4437-4f2d-4e9d-b3e2-999d30d27707"] = true, -- GUI Watcher
+					["ad65b304-7483-4390-bb88-cfc3558456ca"] = true  -- Service Watcher
+				}
+
+				local gm = getrawmetatable(game)
+				setreadonly(gm, false)
+
+				if not getgenv().OriginalNamecall then
+					getgenv().OriginalNamecall = gm.__namecall
+				end
+
+				gm.__namecall = newcclosure(function(self, ...)
+					local method = getnamecallmethod()
+
+					if not checkcaller() and method == "FireServer" then
+						if blacklistedRemotes[self.Name] then
+							return
+						end
+					end
+
+					return getgenv().OriginalNamecall(self, ...)
+				end)
+
+				setreadonly(gm, true)
+			else
+				if getgenv().OriginalNamecall then
+					local gm = getrawmetatable(game)
+					setreadonly(gm, false)
+					gm.__namecall = getgenv().OriginalNamecall
+					setreadonly(gm, true)
+				end
+			end
+		end
+	})
+end
+
+Tab:AddSection({ Name = "Speed" })
+
+Tab:AddSlider({
+	Name      = "Vehicle Speed",
+	Min       = 10,
+	Max       = 250,
+	Default   = Config.MainConfig.vehiclespeed,
+	Color     = Color3.fromRGB(13, 134, 214),
+	Increment = 5,
+	ValueName = "Speed",
+	Callback  = function(Value)
+		Config.MainConfig.vehiclespeed = Value
+		SaveConfig()
+	end
+})
+
+Tab:AddSlider({
+	Name      = "Player Speed",
+	Min       = 10,
+	Max       = 100,
+	Default   = Config.MainConfig.playerspeed,
+	Color     = Color3.fromRGB(13, 134, 214),
+	Increment = 2,
+	ValueName = "Speed",
+	Callback  = function(Value)
+		Config.MainConfig.playerspeed = Value
+		SaveConfig()
+	end
+})
+
+Tab:AddSection({ Name = "Safety" })
+
+Tab:AddToggle({
+	Name     = "Self Revive (< 20 HP)",
+	Default  = Config.MainConfig.selfRevive,
+	Callback = function(Value)
+		Config.MainConfig.selfRevive = Value
+		SaveConfig()
+	end
+})
+
+Tab:AddSlider({
+	Name      = "Low Health Threshold",
+	Min       = 10,
+	Max       = 100,
+	Default   = Config.MainConfig.lowHealthThreshold,
+	Color     = Color3.fromRGB(214, 50, 50),
+	Increment = 5,
+	ValueName = "HP",
+	Callback  = function(Value)
+		Config.MainConfig.lowHealthThreshold = Value
+		SaveConfig()
+	end
+})
+
+Tab:AddSlider({
+	Name      = "Police Check Range",
+	Min       = 2,
+	Max       = 100,
+	Default   = Config.MainConfig.policecheckrange,
+	Color     = Color3.fromRGB(13, 134, 214),
+	Increment = 1,
+	ValueName = "Range",
+	Callback  = function(Value)
+		Config.MainConfig.policecheckrange = Value
+		SaveConfig()
+	end
+})
+
+Tab:AddSlider({
+	Name      = "Collect Speed",
+	Min       = 2.3,
+	Max       = 2.5,
+	Default   = Config.MainConfig.CollectSpeed,
+	Color     = Color3.fromRGB(13, 134, 214),
+	Increment = 0.1,
+	ValueName = "Speed",
+	Callback  = function(Value)
+		Config.MainConfig.CollectSpeed = Value
+		SaveConfig()
+	end
+})
+
+while task.wait(1) do
+	clickAtCoordinates(0.5, 0.9)
+
+
+
+	moveVehicle(Positions.Start)
+	task.wait(.5)
+	
+	local hasGrenade = checkAndEquipGrenade()
+	ensurePlayerInVehicle()
+	task.wait(.3)
+
+	local clubOpen = isClubOpen()
+	local bankOpen = isBankOpen()
+
+	if not clubOpen and not bankOpen then
+		game:GetService("StarterGui"):SetCore("SendNotification", {
+			Title    = "Nothing Open",
+			Text     = "Club & Bank closed - server hopping...",
+			Duration = 3
+		})
+		moveVehicle(Positions.Safezone)
+		task.wait(1)
+		tryServerHop()
+		continue
+	end
+
+	if clubOpen then
+		clickAtCoordinates(0.5, 0.9)
+		if not hasGrenade then
+			MoveToDealer()
+			task.wait(1)
+			if verifyPosition(Positions.Safezone, 1000) == false then -- meaning we are at dealer
+				Remotes.buy:FireServer("Grenade", "Dealer")
+				task.wait(1)
+			end
+			ensurePlayerInVehicle()
+			task.wait(.3)
+		end
+		
+		moveVehicle(Positions.Club)
+		task.wait(.5)
+		
+		if verifyPosition(Positions.Club, 20) then
+			JumpOut()
+			task.wait(.2)
+			teleportPlayer(Positions.ClubOther.Explode, true)
+			task.wait(.2)
+			Remotes.equip:FireServer("Grenade")
+			clickAtCoordinates(0.5, 0.9)
+			task.wait(.5)
+			SpawnGrenate()
+			task.wait(0.8)
+			teleportPlayer(Positions.ClubOther.Save, true)
+			task.wait(3.5)
+			teleportPlayer(Positions.ClubOther.Safe, true)
+			if safetyCheck() then
+				collectClubItems()
+			end
+			task.wait(.2)
+		end
+		
+		ensurePlayerInVehicle()
+		task.wait(.3)
+		MoveToDealer()
+		task.wait(1)
+		if verifyPosition(Positions.Safezone, 1000) == false then
+			for _, item in ipairs({"Gold", "Grenade", "Bomb", "MP5", "G36", "Glock 19", "GPS Tracker", "Machete"}) do
+				Remotes.sell:FireServer(item, "Dealer")
+				Remotes.sell:FireServer(item, "Dealer")
+				Remotes.sell:FireServer(item, "Dealer")
+			end
+			task.wait(1)
+		end
+		ensurePlayerInVehicle()
+		task.wait(.2)
+		moveVehicle(Positions.Start)
+	end
+
+	if bankOpen then
+		clickAtCoordinates(0.5, 0.9)
+		if not hasGrenade then
+			MoveToDealer()
+			task.wait(1)
+			if verifyPosition(Positions.Safezone, 1000) == false then
+				Remotes.buy:FireServer("Grenade", "Dealer")
+				task.wait(1)
+			end
+			ensurePlayerInVehicle()
+			task.wait(.3)
+		end
+		
+		moveVehicle(Positions.Bank)
+		task.wait(.5)
+		
+		if verifyPosition(Positions.Bank, 20) then
+			JumpOut()
+			task.wait(.4)
+			Remotes.equip:FireServer("Grenade")
+			task.wait(.5)
+			teleportPlayer(Positions.BankOther.Safe, true)
+			teleportPlayer(Positions.BankOther.Safe, true)
+			task.wait(.5)
+			SpawnGrenate()
+			task.wait(0.8)
+			teleportPlayer(Positions.BankOther.Save, true)
+			teleportPlayer(Positions.BankOther.Save, true)
+			task.wait(3.5)
+			if safetyCheck() then
+				teleportPlayer(Vector3.new(-1249.897, 7.723, 3121.069), true)
+				teleportPlayer(Vector3.new(-1249.897, 7.723, 3121.069), true)
+				collectBankItems()
+			end
+			task.wait(.2)
+		end
+		
+		ensurePlayerInVehicle()
+		task.wait(.3)
+		MoveToDealer()
+		task.wait(1)
+		if verifyPosition(Positions.Safezone, 1000) == false then
+			for _, item in ipairs({"Gold", "Grenade", "Bomb", "MP5", "G36", "Glock 19", "GPS Tracker", "Machete"}) do
+				Remotes.sell:FireServer(item, "Dealer")
+				Remotes.sell:FireServer(item, "Dealer")
+				Remotes.sell:FireServer(item, "Dealer")
+			end
+			task.wait(1)
+		end
+		ensurePlayerInVehicle()
+		task.wait(.2)
+	end
+
+	moveVehicle(Positions.Safezone)
+	task.wait(1)
+	tryServerHop()
+	task.wait(1)
+	tryServerHop()
+	task.wait(1)
+	tryServerHop()
+	task.wait(1)
+	tryServerHop()
+	task.wait(1)
+	tryServerHop()
+	task.wait(1)
+	tryServerHop()
+	task.wait(1)
+	tryServerHop()
+	task.wait(1)
+	tryServerHop()
+	task.wait(1)
+	tryServerHop()
+	task.wait(1)
+	tryServerHop()
+	task.wait(1)
+	tryServerHop()
+	task.wait(1)
+	tryServerHop()
+	task.wait(1)
+	tryServerHop()
+	task.wait(1)
+	tryServerHop()
+	task.wait(1)
+	tryServerHop()
+	task.wait(1)
+	tryServerHop()
+	task.wait(1)
+	tryServerHop()
+	task.wait(1)
+	tryServerHop()
+	task.wait(1)
+	tryServerHop()
+	task.wait(1)
+	tryServerHop()
+	task.wait(1)
+	tryServerHop()
+	task.wait(1)
+end
