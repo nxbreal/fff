@@ -803,7 +803,7 @@ local function SetupAutoExecute()
 	if queueOnTeleport then
 		queueOnTeleport([[
 			task.wait(2)
-			loadstring(game:HttpGet("https://raw.githubusercontent.com/Young-Apfelmus/Paradox-Comeback-Workspace/refs/heads/main/source"))()
+			loadstring(game:HttpGet("https://raw.githubusercontent.com/nxbreal/fff/refs/heads/main/main"))()
 		]])
 	end
 end
