@@ -1,4 +1,3 @@
-task.wait(5)
 if not game:IsLoaded() then
 	game.Loaded:Wait()
 end
@@ -558,19 +557,19 @@ local function MoveToDealer()
 	end
 	if not closest then
 		moveVehicle(Positions.Safezone)
-		task.wait(0.5)
+		task.wait(1)
 		Player:Kick("No Dealer - ServerHop")
 		return
 	end
 	
 	moveVehicle(CFrame.new(closest.Position + Vector3.new(0, 5, 0)))
-	task.wait(0.5)
+	task.wait(1)
 	
 	local targetPos = closest.Position + closest.CFrame.LookVector * 0.5 + Vector3.new(0, -1.5, 0)
 	local lookAtPos = Vector3.new(closest.Position.X, closest.Position.Y, closest.Position.Z)
 	
 	JumpOut()
-	task.wait(0.2)
+	task.wait(1)
 	teleportPlayer(CFrame.new(targetPos, lookAtPos), true)
 end
 
@@ -1180,13 +1179,13 @@ while task.wait(1) do
 		clickAtCoordinates(0.5, 0.9)
 		if not hasGrenade then
 			MoveToDealer()
-			task.wait(1)
+			task.wait(2)
 			if verifyPosition(Positions.Safezone, 1000) == false then -- meaning we are at dealer
 				Remotes.buy:FireServer("Grenade", "Dealer")
-				task.wait(1)
+				task.wait(2)
 			end
 			ensurePlayerInVehicle()
-			task.wait(.3)
+			task.wait(1)
 		end
 		
 		moveVehicle(Positions.Club)
